@@ -1,17 +1,23 @@
 """
 filter_duplicates.py
 --------------------
-Filtra imagens redundantes de um dataset usando Perceptual Hashing (pHash).
+Filters redundant images from a vineyard dataset using Perceptual Hashing (pHash).
 
-Para cada par de imagens com similaridade acima do limiar configurável,
-a imagem mais recente na ordem alfabética é descartada. O resultado é
-separado em duas pastas: imagens aprovadas e imagens descartadas para
-auditoria. Uma matriz de similaridade visual é gerada como saída gráfica.
+For each image, a 64-bit binary signature is computed via the Discrete Cosine
+Transform (DCT). Pairwise similarity is measured using normalized Hamming Distance.
+Images whose similarity to any already-approved image meets or exceeds the
+configurable threshold are discarded.
 
-Uso:
+Approved images are copied to a clean output folder. Discarded images are
+organized into numbered audit subfolders alongside their reference image,
+enabling manual inspection of filtering decisions.
+
+A visual similarity matrix of the full dataset is saved as a PNG file.
+
+Usage:
     python filter_duplicates.py
 
-As imagens devem estar na pasta definida em PASTA_ENTRADA.
+Input images must be placed in the folder defined by INPUT_FOLDER.
 """
 
 import os
@@ -25,301 +31,311 @@ import imagehash
 
 
 # ---------------------------------------------------------------------------
-# Configurações globais
+# Global settings
 # ---------------------------------------------------------------------------
 
-PASTA_ENTRADA = "uvas"
-PASTA_APROVADAS = "dataset_uvas_final_aprovado"
-PASTA_DESCARTADAS = "dataset_uvas_auditoria_pastas"
-LIMIAR_SIMILARIDADE = 0.80   # imagens com similaridade >= este valor são descartadas
-TAMANHO_HASH = 64            # número de bits da assinatura pHash (padrão: 8x8 = 64 bits)
-EXTENSOES_VALIDAS = (".png", ".jpg", ".jpeg")
+INPUT_FOLDER = "grapes"
+APPROVED_FOLDER = "dataset_grapes_approved"
+DISCARDED_FOLDER = "dataset_grapes_audit"
+SIMILARITY_THRESHOLD = 0.80   # images with similarity >= this value are discarded
+HASH_BITS = 64                # pHash signature length in bits (default: 8x8 = 64)
+VALID_EXTENSIONS = (".png", ".jpg", ".jpeg")
 
 
 # ---------------------------------------------------------------------------
-# Funções de hashing
+# Hashing functions
 # ---------------------------------------------------------------------------
 
-def carregar_hashes(pasta: str, arquivos: list) -> dict:
+def compute_hashes(folder: str, files: list) -> dict:
     """
-    Calcula e retorna as assinaturas pHash de todas as imagens da pasta.
+    Computes and returns the pHash signature for each image in the folder.
 
-    Parâmetros
+    Parameters
     ----------
-    pasta : str
-        Caminho da pasta contendo as imagens.
-    arquivos : list
-        Lista de nomes de arquivos a processar.
+    folder : str
+        Path to the folder containing the images.
+    files : list
+        List of filenames to process.
 
-    Retorna
+    Returns
     -------
     dict
-        Mapeamento de nome_arquivo -> assinatura pHash.
+        Mapping of filename -> pHash signature.
     """
     hashes = {}
-    print(f"Calculando assinaturas pHash para {len(arquivos)} imagens...")
+    print(f"Computing pHash signatures for {len(files)} images...")
 
-    for arquivo in arquivos:
-        caminho = os.path.join(pasta, arquivo)
+    for filename in files:
+        path = os.path.join(folder, filename)
         try:
-            hashes[arquivo] = imagehash.phash(Image.open(caminho))
-        except Exception as erro:
-            print(f"  [AVISO] Não foi possível processar {arquivo}: {erro}")
+            hashes[filename] = imagehash.phash(Image.open(path))
+        except Exception as error:
+            print(f"  [WARNING] Could not process {filename}: {error}")
 
     return hashes
 
 
-def calcular_similaridade(hash_a: imagehash.ImageHash,
-                           hash_b: imagehash.ImageHash,
-                           bits: int = 64) -> float:
+def compute_similarity(hash_a: imagehash.ImageHash,
+                        hash_b: imagehash.ImageHash,
+                        bits: int = 64) -> float:
     """
-    Calcula a similaridade percentual entre dois hashes pHash.
+    Computes the percentage similarity between two pHash signatures.
 
-    A similaridade é calculada como 1 - (distância de Hamming / total de bits).
+    Similarity is defined as 1 - (Hamming distance / total bits).
 
-    Parâmetros
+    Parameters
     ----------
     hash_a, hash_b : imagehash.ImageHash
-        Assinaturas pHash a comparar.
+        pHash signatures to compare.
     bits : int
-        Número de bits das assinaturas (padrão 64).
+        Number of bits in the signatures (default 64).
 
-    Retorna
+    Returns
     -------
     float
-        Valor entre 0.0 (totalmente diferentes) e 1.0 (idênticas).
+        Value between 0.0 (completely different) and 1.0 (identical).
     """
-    distancia = hash_a - hash_b
-    return 1.0 - (distancia / bits)
+    distance = hash_a - hash_b
+    return 1.0 - (distance / bits)
 
 
 # ---------------------------------------------------------------------------
-# Funções de visualização
+# Visualization
 # ---------------------------------------------------------------------------
 
-def construir_matriz_similaridade(arquivos: list, hashes: dict,
-                                  bits: int = 64) -> np.ndarray:
+def build_similarity_matrix(files: list, hashes: dict,
+                              bits: int = 64) -> np.ndarray:
     """
-    Constrói a matriz de similaridade entre todas as imagens do dataset.
+    Builds the pairwise similarity matrix for all images in the dataset.
 
-    Parâmetros
+    Parameters
     ----------
-    arquivos : list
-        Lista ordenada de nomes de arquivo.
+    files : list
+        Ordered list of filenames.
     hashes : dict
-        Mapeamento de nome_arquivo -> assinatura pHash.
+        Mapping of filename -> pHash signature.
     bits : int
-        Número de bits das assinaturas.
+        Number of bits in the signatures.
 
-    Retorna
+    Returns
     -------
     np.ndarray
-        Matriz quadrada (n x n) com valores de similaridade entre 0 e 1.
+        Square matrix (n x n) with similarity values between 0 and 1.
     """
-    n = len(arquivos)
-    matriz = np.zeros((n, n))
+    n = len(files)
+    matrix = np.zeros((n, n))
 
-    for i, arquivo_i in enumerate(arquivos):
-        for j, arquivo_j in enumerate(arquivos):
-            matriz[i, j] = calcular_similaridade(hashes[arquivo_i],
-                                                  hashes[arquivo_j], bits)
-    return matriz
+    for i, file_i in enumerate(files):
+        for j, file_j in enumerate(files):
+            matrix[i, j] = compute_similarity(hashes[file_i], hashes[file_j], bits)
+
+    return matrix
 
 
-def salvar_heatmap(matriz: np.ndarray, arquivos: list,
-                   caminho_saida: str = "matriz_similaridade.png") -> None:
+def save_similarity_heatmap(matrix: np.ndarray, files: list,
+                              output_path: str = "similarity_matrix.png") -> None:
     """
-    Gera e salva o heatmap da matriz de similaridade.
+    Generates and saves a heatmap of the similarity matrix.
 
-    Exibe no máximo 30 rótulos nos eixos para evitar sobreposição.
-    O eixo Y cresce de baixo para cima seguindo a convenção cartesiana.
+    Displays at most 30 axis labels to avoid overlapping.
+    The Y axis grows bottom-up following Cartesian convention.
 
-    Parâmetros
+    Parameters
     ----------
-    matriz : np.ndarray
-        Matriz de similaridade gerada por construir_matriz_similaridade.
-    arquivos : list
-        Lista ordenada de nomes de arquivo (usada como rótulos dos eixos).
-    caminho_saida : str
-        Caminho do arquivo de imagem a ser salvo.
+    matrix : np.ndarray
+        Similarity matrix generated by build_similarity_matrix.
+    files : list
+        Ordered list of filenames used as axis labels.
+    output_path : str
+        Path of the output image file.
     """
-    n = len(arquivos)
-    passo = max(1, n // 30)
-    rotulos = [nome if i % passo == 0 else "" for i, nome in enumerate(arquivos)]
+    n = len(files)
+    step = max(1, n // 30)
+    labels = [name if i % step == 0 else "" for i, name in enumerate(files)]
 
     plt.figure(figsize=(12, 10))
     ax = sns.heatmap(
-        matriz,
+        matrix,
         cmap="YlGnBu",
-        xticklabels=rotulos,
-        yticklabels=rotulos,
+        xticklabels=labels,
+        yticklabels=labels,
         vmin=0.0,
         vmax=1.0,
     )
     ax.invert_yaxis()
     ax.tick_params(axis="both", which="both", length=0)
 
-    plt.title("Matriz de Similaridade do Dataset (pHash)", pad=20, fontsize=14)
-    plt.xlabel("Imagens (ordem crescente →)", labelpad=15, fontsize=12)
-    plt.ylabel("Imagens (ordem crescente ↑)", labelpad=15, fontsize=12)
+    plt.title("Dataset Similarity Matrix (pHash)", pad=20, fontsize=14)
+    plt.xlabel("Images (ascending order →)", labelpad=15, fontsize=12)
+    plt.ylabel("Images (ascending order ↑)", labelpad=15, fontsize=12)
     plt.xticks(rotation=90, fontsize=8)
     plt.yticks(rotation=0, fontsize=8)
     plt.tight_layout()
-    plt.savefig(caminho_saida, dpi=300)
+    plt.savefig(output_path, dpi=300)
     plt.close()
 
-    print(f"Matriz de similaridade salva em '{caminho_saida}'.")
+    print(f"Similarity matrix saved to '{output_path}'.")
 
 
 # ---------------------------------------------------------------------------
-# Função de filtragem
+# Filtering
 # ---------------------------------------------------------------------------
 
-def filtrar_redundantes(arquivos: list, matriz: np.ndarray,
-                         limiar: float) -> tuple:
+def filter_duplicates(files: list, matrix: np.ndarray,
+                       threshold: float) -> tuple:
     """
-    Identifica imagens redundantes comparando cada uma com as já aprovadas.
+    Identifies redundant images by comparing each one against already-approved images.
 
-    Uma imagem é considerada redundante se a sua similaridade com qualquer
-    imagem já aprovada for maior ou igual ao limiar definido.
+    An image is considered redundant if its similarity to any already-approved
+    image meets or exceeds the given threshold.
 
-    Parâmetros
+    Parameters
     ----------
-    arquivos : list
-        Lista ordenada de nomes de arquivo.
-    matriz : np.ndarray
-        Matriz de similaridade (n x n).
-    limiar : float
-        Limiar de similaridade acima do qual a imagem é descartada.
+    files : list
+        Ordered list of filenames.
+    matrix : np.ndarray
+        Pairwise similarity matrix (n x n).
+    threshold : float
+        Similarity threshold above which an image is discarded.
 
-    Retorna
+    Returns
     -------
     tuple
-        (aprovadas, descartadas) onde cada elemento é uma lista de dicts
-        com as chaves 'arquivo', e opcionalmente 'referencia' e 'similaridade'.
+        (approved, discarded) where each element is a list of dicts.
+        Approved dicts contain 'filename'.
+        Discarded dicts contain 'filename', 'reference', and 'similarity'.
     """
-    aprovadas = []
-    descartadas = []
-    indices_aprovados = []
+    approved = []
+    discarded = []
+    approved_indices = []
 
-    for i, arquivo in enumerate(arquivos):
-        referencia = None
-        similaridade_max = 0.0
+    for i, filename in enumerate(files):
+        reference = None
+        max_similarity = 0.0
 
-        for idx_aprovado in indices_aprovados:
-            sim = matriz[i, idx_aprovado]
-            if sim >= limiar and sim > similaridade_max:
-                similaridade_max = sim
-                referencia = arquivos[idx_aprovado]
+        for idx in approved_indices:
+            sim = matrix[i, idx]
+            if sim >= threshold and sim > max_similarity:
+                max_similarity = sim
+                reference = files[idx]
 
-        if referencia is not None:
-            descartadas.append({
-                "arquivo": arquivo,
-                "referencia": referencia,
-                "similaridade": similaridade_max,
+        if reference is not None:
+            discarded.append({
+                "filename": filename,
+                "reference": reference,
+                "similarity": max_similarity,
             })
         else:
-            aprovadas.append({"arquivo": arquivo})
-            indices_aprovados.append(i)
+            approved.append({"filename": filename})
+            approved_indices.append(i)
 
-    return aprovadas, descartadas
+    return approved, discarded
 
 
 # ---------------------------------------------------------------------------
-# Funções de saída
+# Output functions
 # ---------------------------------------------------------------------------
 
-def copiar_aprovadas(aprovadas: list, pasta_entrada: str,
-                     pasta_saida: str) -> None:
+def copy_approved(approved: list, input_folder: str,
+                  output_folder: str) -> None:
     """
-    Copia as imagens aprovadas para a pasta de saída.
+    Copies approved images to the output folder.
     """
-    os.makedirs(pasta_saida, exist_ok=True)
-    for item in aprovadas:
+    os.makedirs(output_folder, exist_ok=True)
+    for item in approved:
         shutil.copy2(
-            os.path.join(pasta_entrada, item["arquivo"]),
-            os.path.join(pasta_saida, item["arquivo"]),
+            os.path.join(input_folder, item["filename"]),
+            os.path.join(output_folder, item["filename"]),
         )
 
 
-def copiar_descartadas_para_auditoria(descartadas: list, pasta_entrada: str,
-                                       pasta_saida: str) -> None:
+def copy_discarded_for_audit(discarded: list, input_folder: str,
+                              output_folder: str) -> None:
     """
-    Copia cada par (referência + descartada) em uma subpasta numerada
-    para facilitar a revisão manual dos descartes.
+    Copies each discarded pair (reference + duplicate) into a numbered
+    subfolder to facilitate manual review.
 
-    Estrutura gerada:
-        pasta_saida/
-            par_0001/
-                1_REF_<nome_referencia>.jpg
-                2_DESC_(XX%_igual)_<nome_descartada>.jpg
-            par_0002/
+    Output structure:
+        output_folder/
+            pair_0001/
+                1_REF_<reference_filename>.jpg
+                2_DISC_(XX%_match)_<discarded_filename>.jpg
+            pair_0002/
                 ...
+
+    Parameters
+    ----------
+    discarded : list
+        List of dicts with keys 'filename', 'reference', and 'similarity'.
+    input_folder : str
+        Folder containing the original images.
+    output_folder : str
+        Root folder where audit subfolders will be created.
     """
-    os.makedirs(pasta_saida, exist_ok=True)
+    os.makedirs(output_folder, exist_ok=True)
 
-    for numero, item in enumerate(descartadas, start=1):
-        pasta_par = os.path.join(pasta_saida, f"par_{numero:04d}")
-        os.makedirs(pasta_par, exist_ok=True)
+    for number, item in enumerate(discarded, start=1):
+        pair_folder = os.path.join(output_folder, f"pair_{number:04d}")
+        os.makedirs(pair_folder, exist_ok=True)
 
-        pct = int(item["similaridade"] * 100)
-        nome_ref = f"1_REF_{item['referencia']}"
-        nome_desc = f"2_DESC_({pct}pct_igual)_{item['arquivo']}"
+        pct = int(item["similarity"] * 100)
+        ref_name = f"1_REF_{item['reference']}"
+        disc_name = f"2_DISC_({pct}pct_match)_{item['filename']}"
 
         shutil.copy2(
-            os.path.join(pasta_entrada, item["referencia"]),
-            os.path.join(pasta_par, nome_ref),
+            os.path.join(input_folder, item["reference"]),
+            os.path.join(pair_folder, ref_name),
         )
         shutil.copy2(
-            os.path.join(pasta_entrada, item["arquivo"]),
-            os.path.join(pasta_par, nome_desc),
+            os.path.join(input_folder, item["filename"]),
+            os.path.join(pair_folder, disc_name),
         )
 
-        print(f"  par_{numero:04d}: {item['arquivo']} ({pct}% similar a {item['referencia']})")
+        print(f"  pair_{number:04d}: {item['filename']} ({pct}% match with {item['reference']})")
 
 
-def imprimir_relatorio(total: int, aprovadas: list, descartadas: list,
-                        limiar: float) -> None:
+def print_report(total: int, approved: list, discarded: list,
+                  threshold: float) -> None:
     """
-    Exibe um resumo do processo de filtragem no terminal.
+    Prints a summary of the filtering process to the terminal.
     """
-    print("\n--- Relatório de filtragem ---")
-    print(f"Total analisado : {total} imagens")
-    print(f"Aprovadas       : {len(aprovadas)} imagens")
-    print(f"Descartadas     : {len(descartadas)} imagens")
-    print(f"Limiar utilizado: {limiar * 100:.0f}%")
+    print("\n--- Filtering report ---")
+    print(f"Total analyzed : {total} images")
+    print(f"Approved       : {len(approved)} images")
+    print(f"Discarded      : {len(discarded)} images")
+    print(f"Threshold used : {threshold * 100:.0f}%")
 
 
 # ---------------------------------------------------------------------------
-# Ponto de entrada
+# Entry point
 # ---------------------------------------------------------------------------
 
 def main():
-    arquivos = sorted([
-        f for f in os.listdir(PASTA_ENTRADA)
-        if f.lower().endswith(EXTENSOES_VALIDAS)
+    files = sorted([
+        f for f in os.listdir(INPUT_FOLDER)
+        if f.lower().endswith(VALID_EXTENSIONS)
     ])
 
-    if not arquivos:
-        print(f"Nenhuma imagem encontrada em '{PASTA_ENTRADA}'.")
+    if not files:
+        print(f"No images found in '{INPUT_FOLDER}'.")
         return
 
-    hashes = carregar_hashes(PASTA_ENTRADA, arquivos)
+    hashes = compute_hashes(INPUT_FOLDER, files)
 
-    print("Construindo matriz de similaridade...")
-    matriz = construir_matriz_similaridade(arquivos, hashes, TAMANHO_HASH)
-    salvar_heatmap(matriz, arquivos)
+    print("Building similarity matrix...")
+    matrix = build_similarity_matrix(files, hashes, HASH_BITS)
+    save_similarity_heatmap(matrix, files)
 
-    print(f"\nFiltrando imagens com similaridade >= {LIMIAR_SIMILARIDADE * 100:.0f}%...")
-    aprovadas, descartadas = filtrar_redundantes(arquivos, matriz, LIMIAR_SIMILARIDADE)
+    print(f"\nFiltering images with similarity >= {SIMILARITY_THRESHOLD * 100:.0f}%...")
+    approved, discarded = filter_duplicates(files, matrix, SIMILARITY_THRESHOLD)
 
-    print("\nCopiando imagens aprovadas...")
-    copiar_aprovadas(aprovadas, PASTA_ENTRADA, PASTA_APROVADAS)
+    print("\nCopying approved images...")
+    copy_approved(approved, INPUT_FOLDER, APPROVED_FOLDER)
 
-    print("\nOrganizando imagens descartadas para auditoria...")
-    copiar_descartadas_para_auditoria(descartadas, PASTA_ENTRADA, PASTA_DESCARTADAS)
+    print("\nOrganizing discarded images for audit...")
+    copy_discarded_for_audit(discarded, INPUT_FOLDER, DISCARDED_FOLDER)
 
-    imprimir_relatorio(len(arquivos), aprovadas, descartadas, LIMIAR_SIMILARIDADE)
+    print_report(len(files), approved, discarded, SIMILARITY_THRESHOLD)
 
 
 if __name__ == "__main__":
