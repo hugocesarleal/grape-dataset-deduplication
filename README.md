@@ -144,4 +144,4 @@ Este repositório faz parte de um *pipeline* maior que inclui:
 Hugo César Leal  
 Engenharia de Computação — IFMG *Campus* Bambuí  
 Orientador: Prof. Dr. Ciniro Aparecido Leite Nametala  
-Coorientador: Prof. Dr. João Carlos Sampaio Maldonado Costa Mendes (IPB, Portugal)
+Coorientador: Prof. Dr. João Carlos Sampaio Maldonado Costa Mendes (UPB, Portugal)
